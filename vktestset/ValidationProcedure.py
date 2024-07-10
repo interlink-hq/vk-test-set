@@ -26,7 +26,8 @@ class TestFailure(RuntimeError):
 PodStatus = Literal[
     'Pending', 
     'Running', 
-    'Succeeded', 
+    'Succeeded',
+    'Completed',
     'Failed', 
     'Unknown', 
     ] 
@@ -63,7 +64,7 @@ class CheckPod(BaseModel, extra='forbid'):
     """
     name: str = Field(description="Name of the Pod")
     namespace: str = Field(description="Namespace where the Pod is defined")
-    status: PodStatus = Field('Succeeded', description="Status of the pod for the test to succeed")
+    status: PodStatus = Field('Completed', description="Status of the pod for the test to succeed")
 
     def execute(self, k8s):
         pod = k8s.read_namespaced_pod(name=self.name, namespace=self.namespace)
