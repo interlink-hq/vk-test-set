@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oscar-cowsay-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - args:
+    - ' echo $EVENT | /data/supervisor '
+    command:
+    - /bin/sh
+    - -c
+    env:
+    - name: fprocess
+      value: /oscar/bin/supervisor
+    - name: max_inflight
+      value: "1"
+    - name: write_debug
+      value: "true"
+    - name: exec_timeout
+      value: "0"
+    - name: read_timeout
+      value: "300"
+    - name: write_timeout
+      value: "300"
+    - name: healthcheck_interval
+      value: "5"
+    - name: EVENT
+      value: MTIzNDU2NzgK
+    - name: JOB_UUID
+      value: fdfc2d23-294f-43ea-bc68-4a2807fdf5f0
+    - name: RESOURCE_ID
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: spec.nodeName
+    image: ghcr.io/grycap/cowsay
+    imagePullPolicy: Always
+    name: oscar-container
+    volumeMounts:
+    - mountPath: /oscar/config
+      name: oscar-config
+      readOnly: true
+    - mountPath: /data
+      name: shared-data
+  initContainers:
+  - args:
+    - cp -r /supervisor-folder/* /data
+    command:
+    - /bin/sh
+    - -c
+    env:
+    - name: FAAS_SUPERVISOR_VERSION
+      value: 1.5.7
+    - name: WATCHDOG_VERSION
+      value: 0.2.1
+    image: ghcr.io/grycap/faas-supervisor-kit:1.5.8
+    imagePullPolicy: Always
+    name: supervisor-container
+    volumeMounts:
+    - mountPath: /data
+      name: shared-data
+  volumes:
+  - configMap:
+      defaultMode: 420
+      name: oscar-cowsay-cm-{{ uuid }}
+    name: oscar-config
+  - emptyDir: {}
+    name: shared-data
+  
+  tolerations: {{ tolerations | tojson }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oscar-cowsay-cm-{{ uuid }}
+  namespace: {{ namespace }}
+data:
+  script.sh: |
+    #!/bin/sh
+
+    if [ "$INPUT_TYPE" = "json" ]
+    then
+        jq '.message' "$INPUT_FILE_PATH" -r | /usr/games/cowsay
+    else
+        cat "$INPUT_FILE_PATH" | /usr/games/cowsay
+    fi
+  signature.txt: |
+    99999999
+
+################################################################################
+# VALIDATION
+timeout_seconds: 60
+check_pods: 
+  - name: oscar-cowsay-{{ uuid }}
+    namespace: {{ namespace }}
+
+check_logs: 
+  - name: oscar-cowsay-{{ uuid }}
+    namespace: {{ namespace }}
+    container: oscar-container
+    regex: 12345678
+    operator: Exists
+    
+  - name: oscar-cowsay-{{ uuid }}
+    namespace: {{ namespace }}
+    container: oscar-container
+    regex: 99999999
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: oscar-cowsay-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: config_map
+    name: oscar-cowsay-cm-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
