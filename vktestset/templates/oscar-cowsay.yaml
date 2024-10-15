@@ -6,11 +6,9 @@ metadata:
   annotations: {{ annotations | tojson }}
 
 spec:
-  nodeSelector:
-    kubernetes.io/hostname: {{ target_node }}
-
   containers:
-  - args:
+  - name: oscar-container
+    args:
     - ' echo $EVENT | /data/supervisor '
     command:
     - /bin/sh
@@ -39,9 +37,14 @@ spec:
         fieldRef:
           apiVersion: v1
           fieldPath: spec.nodeName
-    image: ghcr.io/grycap/cowsay
-    imagePullPolicy: Always
-    name: oscar-container
+    image: docker://ghcr.io/grycap/cowsay
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: "1"
+        memory: 1Gi
     volumeMounts:
     - mountPath: /oscar/config
       name: oscar-config
@@ -49,8 +52,9 @@ spec:
     - mountPath: /data
       name: shared-data
   initContainers:
-  - args:
-    - cp -r /supervisor-folder/* /data
+  - name: supervisor-container
+    args:
+    - cp -r /supervisor/* /data
     command:
     - /bin/sh
     - -c
@@ -59,9 +63,7 @@ spec:
       value: 1.5.7
     - name: WATCHDOG_VERSION
       value: 0.2.1
-    image: ghcr.io/grycap/faas-supervisor-kit:1.5.8
-    imagePullPolicy: Always
-    name: supervisor-container
+    image: docker://ghcr.io/grycap/faas-supervisor-kit:1.5.8
     volumeMounts:
     - mountPath: /data
       name: shared-data
@@ -72,9 +74,10 @@ spec:
     name: oscar-config
   - emptyDir: {}
     name: shared-data
-  
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
   tolerations: {{ tolerations | tojson }}
-
+  restartPolicy: Never
 ---
 apiVersion: v1
 kind: ConfigMap
