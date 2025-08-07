@@ -1,0 +1,273 @@
+## Downward API with Environment Variables and Volumes
+##
+## Tests the Downward API functionality by exposing pod metadata through:
+##  * Environment variables (pod name, namespace, node name, etc.)
+##  * Volume mounts with metadata files
+##  * Integration with secrets and configmaps
+## 
+## This validates that the virtual kubelet properly implements the Downward API
+## and can inject pod metadata into containers through multiple mechanisms.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: downward-config-{{ uuid }}
+  namespace: {{ namespace }}
+data:
+  app-config.yaml: |
+    app:
+      name: "downward-api-test"
+      version: "1.0"
+      description: "Testing Downward API integration"
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: downward-secret-{{ uuid }}
+  namespace: {{ namespace }}
+type: Opaque
+stringData:
+  api-key: "secret-api-key-12345"
+  database-url: "postgresql://user:pass@db:5432/testdb"
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: downward-api-test-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: downward-api-test
+    version: "1.0"
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: downward-api-container
+    image: python:alpine
+    command: ["python", "-c"]
+    args:
+      - |
+        import os
+        import time
+        
+        print("=== Environment Variables from Downward API ===")
+        env_vars = [
+          'POD_NAME', 'POD_NAMESPACE', 'POD_IP', 'NODE_NAME', 
+          'POD_UID', 'POD_LABELS', 'POD_ANNOTATIONS'
+        ]
+        
+        for var in env_vars:
+            value = os.environ.get(var, 'NOT_SET')
+            print(f"{var}: {value}")
+        
+        print("\n=== ConfigMap Environment Variable ===")
+        print(f"CONFIG_VALUE: {os.environ.get('CONFIG_VALUE', 'NOT_SET')}")
+        
+        print("\n=== Secret Environment Variable ===")  
+        print(f"SECRET_API_KEY: {os.environ.get('SECRET_API_KEY', 'NOT_SET')}")
+        
+        print("\n=== Volume-mounted Downward API Files ===")
+        try:
+            with open('/downward/pod-name', 'r') as f:
+                print(f"Volume pod-name: {f.read().strip()}")
+            with open('/downward/pod-namespace', 'r') as f:
+                print(f"Volume pod-namespace: {f.read().strip()}")
+            with open('/downward/labels', 'r') as f:
+                print(f"Volume labels: {f.read().strip()}")
+        except Exception as e:
+            print(f"Error reading downward volume files: {e}")
+        
+        print("\n=== ConfigMap Volume ===")
+        try:
+            with open('/config/app-config.yaml', 'r') as f:
+                print(f"Config file content: {f.read().strip()}")
+        except Exception as e:
+            print(f"Error reading config file: {e}")
+        
+        print("\n=== Secret Volume ===")
+        try:
+            with open('/secrets/database-url', 'r') as f:
+                print(f"Secret database-url: {f.read().strip()}")
+        except Exception as e:
+            print(f"Error reading secret file: {e}")
+        
+        print("=== Test completed ===")
+
+    env:
+      # Environment variables from Downward API
+      - name: POD_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.name
+      - name: POD_NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
+      - name: NODE_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: spec.nodeName
+      - name: POD_UID
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.uid
+      - name: POD_LABELS
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.labels
+      - name: POD_ANNOTATIONS
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.annotations
+      
+      # Environment variables from ConfigMap
+      - name: CONFIG_VALUE
+        valueFrom:
+          configMapKeyRef:
+            name: downward-config-{{ uuid }}
+            key: app-config.yaml
+      
+      # Environment variables from Secret
+      - name: SECRET_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: downward-secret-{{ uuid }}
+            key: api-key
+
+    volumeMounts:
+      # Downward API volume mount
+      - name: downward
+        mountPath: /downward
+      # ConfigMap volume mount
+      - name: config-volume
+        mountPath: /config
+      # Secret volume mount
+      - name: secret-volume
+        mountPath: /secrets
+
+    imagePullPolicy: Always
+    
+  volumes:
+    # Downward API volume
+    - name: downward
+      downwardAPI:
+        items:
+          - path: "pod-name"
+            fieldRef:
+              fieldPath: metadata.name
+          - path: "pod-namespace"
+            fieldRef:
+              fieldPath: metadata.namespace
+          - path: "labels"
+            fieldRef:
+              fieldPath: metadata.labels
+          - path: "annotations"
+            fieldRef:
+              fieldPath: metadata.annotations
+    
+    # ConfigMap volume
+    - name: config-volume
+      configMap:
+        name: downward-config-{{ uuid }}
+    
+    # Secret volume
+    - name: secret-volume
+      secret:
+        secretName: downward-secret-{{ uuid }}
+    
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 15
+check_pods: 
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+
+check_logs: 
+  # Verify Downward API environment variables
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "POD_NAME: downward-api-test-{{ uuid }}"
+    operator: Exists
+
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "POD_NAMESPACE: {{ namespace }}"
+    operator: Exists
+
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "NODE_NAME: {{ target_node }}"
+    operator: Exists
+
+  # Verify ConfigMap environment variable
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "CONFIG_VALUE:.*downward-api-test"
+    operator: Exists
+
+  # Verify Secret environment variable
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "SECRET_API_KEY: secret-api-key-12345"
+    operator: Exists
+
+  # Verify Downward API volume files
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "Volume pod-name: downward-api-test-{{ uuid }}"
+    operator: Exists
+
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "Volume pod-namespace: {{ namespace }}"
+    operator: Exists
+
+  # Verify ConfigMap volume
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "Config file content:.*downward-api-test"
+    operator: Exists
+
+  # Verify Secret volume
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "Secret database-url: postgresql://user:pass@db:5432/testdb"
+    operator: Exists
+
+  # Verify test completion
+  - name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "Test completed"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: downward-api-test-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: config_map
+    name: downward-config-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
+
+  - type: secret
+    name: downward-secret-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
