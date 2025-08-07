@@ -1,21 +1,46 @@
-## Downward API with Environment Variables
+## ConfigMap and Secret Environment Variables
 ##
-## Tests the Downward API functionality by exposing pod metadata through:
-##  * Environment variables using supported fieldRef paths
-##  * Integration with ConfigMaps and Secrets
+## Tests environment variable injection from:
+##  * ConfigMaps using configMapKeyRef
+##  * Secrets using secretKeyRef
 ## 
-## This validates that the virtual kubelet properly implements the Downward API
-## fieldRef environment variable injection.
+## This validates that the virtual kubelet properly implements
+## ConfigMap and Secret environment variable references.
 
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config-{{ uuid }}
+  namespace: {{ namespace }}
+data:
+  app-name: "config-test-app"
+  app-version: "1.0.0"
+  environment: "test"
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret-{{ uuid }}
+  namespace: {{ namespace }}
+type: Opaque
+stringData:
+  api-key: "secret-api-key-12345"
+  database-password: "super-secret-password"
+  token: "bearer-token-xyz789"
+
+---
 
 apiVersion: v1
 kind: Pod
 metadata:
-  name: downward-api-test-{{ uuid }}
+  name: configmap-secret-test-{{ uuid }}
   namespace: {{ namespace }}
   annotations: {{ annotations | tojson }}
   labels:
-    app: downward-api-test
+    app: configmap-secret-test
     version: "1.0"
     test-id: "{{ uuid }}"
 
@@ -25,7 +50,7 @@ spec:
     kubernetes.io/hostname: {{ target_node }}
 
   containers:
-  - name: downward-api-container
+  - name: configmap-secret-container
     image: python:alpine
     command: ["python", "-c"]
     args:
@@ -33,48 +58,54 @@ spec:
         import os
         import time
         
-        print("=== Downward API Environment Variables ===")
-        env_vars = [
-          'POD_NAME', 'POD_NAMESPACE', 'POD_UID', 'NODE_NAME', 
-          'SERVICE_ACCOUNT', 'POD_IP', 'HOST_IP'
-        ]
+        print("=== ConfigMap Environment Variables ===")
+        config_vars = ['APP_NAME', 'APP_VERSION', 'ENVIRONMENT']
+        for var in config_vars:
+            value = os.environ.get(var, 'NOT_SET')
+            print(f"{var}: {value}")
         
-        for var in env_vars:
+        print("\n=== Secret Environment Variables ===")
+        secret_vars = ['API_KEY', 'DB_PASSWORD', 'AUTH_TOKEN']
+        for var in secret_vars:
             value = os.environ.get(var, 'NOT_SET')
             print(f"{var}: {value}")
         
         print("=== Test completed ===")
 
     env:
-      # Environment variables from Downward API fieldRef
-      - name: POD_NAME
+      # Environment variables from ConfigMap
+      - name: APP_NAME
         valueFrom:
-          fieldRef:
-            fieldPath: metadata.name
-      - name: POD_NAMESPACE
+          configMapKeyRef:
+            name: test-config-{{ uuid }}
+            key: app-name
+      - name: APP_VERSION
         valueFrom:
-          fieldRef:
-            fieldPath: metadata.namespace
-      - name: POD_UID
+          configMapKeyRef:
+            name: test-config-{{ uuid }}
+            key: app-version
+      - name: ENVIRONMENT
         valueFrom:
-          fieldRef:
-            fieldPath: metadata.uid
-      - name: NODE_NAME
+          configMapKeyRef:
+            name: test-config-{{ uuid }}
+            key: environment
+      
+      # Environment variables from Secret
+      - name: API_KEY
         valueFrom:
-          fieldRef:
-            fieldPath: spec.nodeName
-      - name: SERVICE_ACCOUNT
+          secretKeyRef:
+            name: test-secret-{{ uuid }}
+            key: api-key
+      - name: DB_PASSWORD
         valueFrom:
-          fieldRef:
-            fieldPath: spec.serviceAccountName
-      - name: POD_IP
+          secretKeyRef:
+            name: test-secret-{{ uuid }}
+            key: database-password
+      - name: AUTH_TOKEN
         valueFrom:
-          fieldRef:
-            fieldPath: status.podIP
-      - name: HOST_IP
-        valueFrom:
-          fieldRef:
-            fieldPath: status.hostIP
+          secretKeyRef:
+            name: test-secret-{{ uuid }}
+            key: token
 
 
     imagePullPolicy: Always
@@ -87,40 +118,61 @@ spec:
 # VALIDATION
 timeout_seconds: 15
 check_pods: 
-  - name: downward-api-test-{{ uuid }}
+  - name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
 
 check_logs: 
-  # Verify Downward API fieldRef environment variables
-  - name: downward-api-test-{{ uuid }}
+  # Verify ConfigMap environment variables
+  - name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
-    regex: "POD_NAME: downward-api-test-{{ uuid }}"
+    regex: "APP_NAME: config-test-app"
     operator: Exists
 
-  - name: downward-api-test-{{ uuid }}
+  - name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
-    regex: "POD_NAMESPACE: {{ namespace }}"
+    regex: "APP_VERSION: 1.0.0"
     operator: Exists
 
-  - name: downward-api-test-{{ uuid }}
+  - name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
-    regex: "NODE_NAME: {{ target_node }}"
+    regex: "ENVIRONMENT: test"
     operator: Exists
 
-  - name: downward-api-test-{{ uuid }}
+  # Verify Secret environment variables
+  - name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
-    regex: "POD_UID: [a-f0-9-]+"
+    regex: "API_KEY: secret-api-key-12345"
+    operator: Exists
+
+  - name: configmap-secret-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "DB_PASSWORD: super-secret-password"
+    operator: Exists
+
+  - name: configmap-secret-test-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "AUTH_TOKEN: bearer-token-xyz789"
     operator: Exists
 
   # Verify test completion
-  - name: downward-api-test-{{ uuid }}
+  - name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
     regex: "Test completed"
     operator: Exists
 
 clean_configs:
   - type: pod
-    name: downward-api-test-{{ uuid }}
+    name: configmap-secret-test-{{ uuid }}
     namespace: {{ namespace }}
     condition: onSuccess
+
+  - type: config_map
+    name: test-config-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
+
+  - type: secret
+    name: test-secret-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
 
