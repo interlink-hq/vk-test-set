@@ -22,7 +22,7 @@ spec:
   initContainers:
     - name: init-git-puller
       imagePullPolicy: Always
-      image: bitnami/git
+      image: bitnamilegacy/git
       command: 
         - git
         - clone
