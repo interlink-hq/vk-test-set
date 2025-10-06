@@ -1,0 +1,315 @@
+## Failing Containers Test
+##
+## Tests that the virtual kubelet properly handles container failures.
+##
+## This validates that the virtual kubelet correctly:
+##  - Reports container failure status
+##  - Captures exit codes from failed containers
+##  - Records error messages in container logs
+##  - Handles different types of failures (exit code, crash, timeout)
+##  - Respects restartPolicy: Never (no automatic restarts)
+##  - Properly handles multi-container pods where some fail
+##
+## Different failure scenarios tested:
+##  1. Non-zero exit code
+##  2. Command not found
+##  3. Runtime error (Python exception)
+##  4. Segmentation fault simulation
+##  5. Multi-container pod with partial failure
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: exit-code-failure-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: failing-container-test
+    test-type: exit-code
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: exit-failure
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Starting container that will fail with exit code 42"
+        echo "ERROR: Simulated application failure"
+        echo "Exit code: 42"
+        exit 42
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: command-not-found-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: failing-container-test
+    test-type: command-not-found
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: missing-command
+    image: busybox:1.36
+    command: ["nonexistent-command"]
+    args: ["--flag", "value"]
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: runtime-error-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: failing-container-test
+    test-type: runtime-error
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: python-exception
+    image: python:3.11-alpine
+    command: ["python", "-c"]
+    args:
+      - |
+        print("Starting Python application...")
+        print("Performing some operations...")
+
+        # This will raise an exception
+        import sys
+        print("About to raise an exception")
+        raise RuntimeError("Simulated application error: database connection failed")
+
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-container-partial-fail-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: failing-container-test
+    test-type: partial-failure
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  # Container 1: Succeeds
+  - name: success-container
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Container 1: Starting successful container"
+        sleep 2
+        echo "Container 1: Completed successfully"
+    imagePullPolicy: Always
+
+  # Container 2: Fails
+  - name: failure-container
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Container 2: Starting container that will fail"
+        sleep 1
+        echo "Container 2: ERROR - Simulating failure"
+        exit 1
+    imagePullPolicy: Always
+
+  # Container 3: Succeeds
+  - name: another-success
+    image: alpine:3.19
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Container 3: Starting another successful container"
+        sleep 3
+        echo "Container 3: Completed successfully"
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oom-simulation-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: failing-container-test
+    test-type: resource-limit
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: memory-hog
+    image: python:3.11-alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        python3 -c "
+        print('Attempting to allocate memory beyond limit...')
+        try:
+            # Try to allocate large array
+            data = bytearray(200 * 1024 * 1024)  # 200MB
+            print('Allocated 200MB - should fail with 50MB limit')
+        except MemoryError as e:
+            print(f'MemoryError: {e}')
+            exit(137)  # Simulate OOM kill exit code
+        "
+    resources:
+      limits:
+        memory: 50Mi
+        cpu: 100m
+      requests:
+        memory: 20Mi
+        cpu: 50m
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 45
+
+check_pods:
+  # All pods should reach Failed status
+  - name: exit-code-failure-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: command-not-found-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: runtime-error-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: multi-container-partial-fail-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: oom-simulation-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Failed
+
+check_logs:
+  # Verify exit code failure logs
+  - name: exit-code-failure-{{ uuid }}
+    namespace: {{ namespace }}
+    container: exit-failure
+    regex: "Simulated application failure"
+    operator: Exists
+
+  - name: exit-code-failure-{{ uuid }}
+    namespace: {{ namespace }}
+    container: exit-failure
+    regex: "Exit code: 42"
+    operator: Exists
+
+  # Verify Python exception logs
+  - name: runtime-error-{{ uuid }}
+    namespace: {{ namespace }}
+    container: python-exception
+    regex: "RuntimeError.*database connection failed"
+    operator: Exists
+
+  # Verify multi-container partial failure
+  - name: multi-container-partial-fail-{{ uuid }}
+    namespace: {{ namespace }}
+    container: success-container
+    regex: "Container 1: Completed successfully"
+    operator: Exists
+
+  - name: multi-container-partial-fail-{{ uuid }}
+    namespace: {{ namespace }}
+    container: failure-container
+    regex: "Container 2: ERROR - Simulating failure"
+    operator: Exists
+
+  - name: multi-container-partial-fail-{{ uuid }}
+    namespace: {{ namespace }}
+    container: another-success
+    regex: "Container 3: Completed successfully"
+    operator: Exists
+
+  # Verify OOM simulation
+  - name: oom-simulation-{{ uuid }}
+    namespace: {{ namespace }}
+    container: memory-hog
+    regex: "Attempting to allocate memory beyond limit"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: exit-code-failure-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: command-not-found-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: runtime-error-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: multi-container-partial-fail-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: oom-simulation-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess

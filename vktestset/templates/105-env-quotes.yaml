@@ -1,0 +1,244 @@
+## Environment Variables with Quotes Test
+##
+## Tests proper handling of quotes in environment variable values.
+##
+## This validates that the virtual kubelet correctly:
+##  - Preserves single quotes in env var values
+##  - Preserves double quotes in env var values
+##  - Handles escaped quotes properly
+##  - Handles mixed quotes (single and double in same value)
+##  - Handles special characters with quotes
+##  - Handles JSON strings with quotes
+##  - Handles shell commands with quotes
+##  - Handles empty strings and whitespace
+##
+## Common pitfall: Some implementations incorrectly strip or double-escape
+## quotes when passing environment variables to containers.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: env-quotes-test-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: env-quotes-test
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: quote-tester
+    image: python:3.11-alpine
+    command: ["python", "-c"]
+    args:
+      - |
+        import os
+        import json
+        import sys
+
+        print("=== Testing Environment Variables with Quotes ===\n")
+
+        # Define expected values (exactly as they should appear)
+        tests = [
+            ("SINGLE_QUOTES", "It's a beautiful day"),
+            ("DOUBLE_QUOTES", 'He said "hello world"'),
+            ("MIXED_QUOTES", '''She said "It's working!"'''),
+            ("JSON_STRING", '{"name": "test", "value": "123"}'),
+            ("SHELL_COMMAND", "echo 'Hello' && echo \"World\""),
+            ("ESCAPED_DOUBLE", 'This is a \\"quoted\\" word'),
+            ("ESCAPED_SINGLE", "This is a \\'quoted\\' word"),
+            ("BOTH_QUOTE_TYPES", """Both "double" and 'single' quotes"""),
+            ("EMPTY_STRING", ""),
+            ("SPACES_ONLY", "   "),
+            ("QUOTES_ONLY_SINGLE", "'''"),
+            ("QUOTES_ONLY_DOUBLE", '"""'),
+            ("PATH_WITH_QUOTES", '/path/to/"some file"/directory'),
+            ("SQL_QUERY", "SELECT * FROM users WHERE name = 'John'"),
+            ("BACKTICKS", "Run `command` here"),
+            ("NEWLINE_WITH_QUOTES", "Line 1\nLine 2 with 'quotes'\nLine 3"),
+            ("SPECIAL_CHARS", "Value with @#$%^&*() and 'quotes'"),
+        ]
+
+        failed = []
+        passed = 0
+
+        for var_name, expected_value in tests:
+            actual_value = os.environ.get(var_name)
+
+            print(f"--- Testing: {var_name} ---")
+            print(f"Expected: {repr(expected_value)}")
+            print(f"Actual:   {repr(actual_value)}")
+
+            if actual_value is None:
+                print(f"❌ FAIL: Variable not set")
+                failed.append((var_name, "not set", expected_value))
+            elif actual_value == expected_value:
+                print(f"✅ PASS")
+                passed += 1
+            else:
+                print(f"❌ FAIL: Value mismatch")
+                print(f"   Length: expected={len(expected_value)}, actual={len(actual_value)}")
+                # Show character-by-character comparison for first difference
+                for i, (e, a) in enumerate(zip(expected_value, actual_value)):
+                    if e != a:
+                        print(f"   First diff at position {i}: expected {repr(e)}, got {repr(a)}")
+                        break
+                failed.append((var_name, actual_value, expected_value))
+
+            print()
+
+        # Test JSON parsing
+        print("--- Special Test: JSON Parsing ---")
+        try:
+            json_value = os.environ.get("JSON_STRING")
+            parsed = json.loads(json_value)
+            if parsed.get("name") == "test" and parsed.get("value") == "123":
+                print("✅ JSON parsing successful")
+                print(f"   Parsed: {parsed}")
+            else:
+                print("❌ JSON parsed but values incorrect")
+                failed.append(("JSON_STRING", "parsing failed", "correct JSON"))
+        except Exception as e:
+            print(f"❌ JSON parsing failed: {e}")
+            failed.append(("JSON_STRING", str(e), "valid JSON"))
+
+        print("\n" + "="*60)
+        print(f"Results: {passed}/{len(tests)} tests passed")
+
+        if failed:
+            print(f"\n❌ {len(failed)} test(s) FAILED:")
+            for var_name, actual, expected in failed:
+                print(f"  - {var_name}")
+                print(f"    Expected: {repr(expected)}")
+                print(f"    Got:      {repr(actual)}")
+            print("\nENV_QUOTES_TEST_FAILED")
+            sys.exit(1)
+        else:
+            print("\n✅ All tests PASSED!")
+            print("ENV_QUOTES_TEST_PASSED")
+
+    env:
+      # Single quotes in value
+      - name: SINGLE_QUOTES
+        value: "It's a beautiful day"
+
+      # Double quotes in value
+      - name: DOUBLE_QUOTES
+        value: 'He said "hello world"'
+
+      # Mixed quotes
+      - name: MIXED_QUOTES
+        value: 'She said "It''s working!"'
+
+      # JSON string
+      - name: JSON_STRING
+        value: '{"name": "test", "value": "123"}'
+
+      # Shell command with quotes
+      - name: SHELL_COMMAND
+        value: "echo 'Hello' && echo \"World\""
+
+      # Escaped double quotes
+      - name: ESCAPED_DOUBLE
+        value: "This is a \\\"quoted\\\" word"
+
+      # Escaped single quotes
+      - name: ESCAPED_SINGLE
+        value: "This is a \\'quoted\\' word"
+
+      # Both quote types
+      - name: BOTH_QUOTE_TYPES
+        value: "Both \"double\" and 'single' quotes"
+
+      # Edge cases
+      - name: EMPTY_STRING
+        value: ""
+
+      - name: SPACES_ONLY
+        value: "   "
+
+      - name: QUOTES_ONLY_SINGLE
+        value: "'''"
+
+      - name: QUOTES_ONLY_DOUBLE
+        value: '"""'
+
+      # Real-world examples
+      - name: PATH_WITH_QUOTES
+        value: "/path/to/\"some file\"/directory"
+
+      - name: SQL_QUERY
+        value: "SELECT * FROM users WHERE name = 'John'"
+
+      - name: BACKTICKS
+        value: "Run `command` here"
+
+      - name: NEWLINE_WITH_QUOTES
+        value: "Line 1\nLine 2 with 'quotes'\nLine 3"
+
+      - name: SPECIAL_CHARS
+        value: "Value with @#$%^&*() and 'quotes'"
+
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 20
+
+check_pods:
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Succeeded
+
+check_logs:
+  # Check that test completed
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: quote-tester
+    regex: "ENV_QUOTES_TEST_PASSED"
+    operator: Exists
+
+  # Verify specific quote handling
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: quote-tester
+    regex: "Testing: SINGLE_QUOTES"
+    operator: Exists
+
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: quote-tester
+    regex: "Testing: DOUBLE_QUOTES"
+    operator: Exists
+
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: quote-tester
+    regex: "Testing: JSON_STRING"
+    operator: Exists
+
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: quote-tester
+    regex: "JSON parsing successful"
+    operator: Exists
+
+  # Verify final success message
+  - name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: quote-tester
+    regex: "All tests PASSED"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: env-quotes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always

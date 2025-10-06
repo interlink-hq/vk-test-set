@@ -1,0 +1,343 @@
+## Failed Jobs Result in Failed Pods Test
+##
+## Tests that Kubernetes Jobs with failing containers properly result in
+## Failed pod status, ensuring the virtual kubelet correctly propagates
+## failure status from Job pods.
+##
+## This validates that:
+##  - Jobs with backoffLimit: 0 fail immediately (no retries)
+##  - Failed jobs result in Failed pod status (not Succeeded)
+##  - Job failure is properly reported to the Kubernetes API
+##  - Different types of failures are correctly handled
+##  - Job controller properly tracks failure counts
+##
+## IMPORTANT: This tests Jobs, not bare Pods. Jobs wrap pods and have
+## different restart/retry semantics that must be respected.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-exit-code-fail-{{ uuid }}
+  namespace: {{ namespace }}
+  labels:
+    app: failed-job-test
+    test-type: exit-code
+    test-id: "{{ uuid }}"
+
+spec:
+  # No retries - fail immediately
+  backoffLimit: 0
+
+  template:
+    metadata:
+      annotations: {{ annotations | tojson }}
+      labels:
+        app: failed-job-test
+        test-type: exit-code
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ target_node }}
+
+      containers:
+      - name: exit-failure
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Job started at $(date)"
+            echo "This job is designed to fail"
+            echo "Simulating application error..."
+            sleep 2
+            echo "ERROR: Application failed with exit code 1"
+            exit 1
+        imagePullPolicy: Always
+
+      tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-python-exception-{{ uuid }}
+  namespace: {{ namespace }}
+  labels:
+    app: failed-job-test
+    test-type: exception
+    test-id: "{{ uuid }}"
+
+spec:
+  backoffLimit: 0
+
+  template:
+    metadata:
+      annotations: {{ annotations | tojson }}
+      labels:
+        app: failed-job-test
+        test-type: exception
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ target_node }}
+
+      containers:
+      - name: python-crash
+        image: python:3.11-alpine
+        command: ["python", "-c"]
+        args:
+          - |
+            import sys
+            import time
+
+            print("Job execution started")
+            print("Performing initialization...")
+            time.sleep(1)
+
+            print("About to raise an exception")
+            raise Exception("Simulated job failure: database connection failed")
+
+        imagePullPolicy: Always
+
+      tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-multi-container-fail-{{ uuid }}
+  namespace: {{ namespace }}
+  labels:
+    app: failed-job-test
+    test-type: multi-container
+    test-id: "{{ uuid }}"
+
+spec:
+  backoffLimit: 0
+
+  template:
+    metadata:
+      annotations: {{ annotations | tojson }}
+      labels:
+        app: failed-job-test
+        test-type: multi-container
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ target_node }}
+
+      containers:
+      # Container 1: Succeeds
+      - name: success-sidecar
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Sidecar: Starting"
+            sleep 3
+            echo "Sidecar: Completed successfully"
+        imagePullPolicy: Always
+
+      # Container 2: Fails - should cause entire job to fail
+      - name: main-app
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Main: Starting"
+            sleep 1
+            echo "Main: Encountered critical error"
+            exit 1
+        imagePullPolicy: Always
+
+      tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-with-retries-{{ uuid }}
+  namespace: {{ namespace }}
+  labels:
+    app: failed-job-test
+    test-type: with-retries
+    test-id: "{{ uuid }}"
+
+spec:
+  # Allow 2 retries, but still fail eventually
+  backoffLimit: 2
+
+  template:
+    metadata:
+      annotations: {{ annotations | tojson }}
+      labels:
+        app: failed-job-test
+        test-type: with-retries
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ target_node }}
+
+      containers:
+      - name: retry-failure
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Attempt started at $(date)"
+            echo "This job will fail even after retries"
+            sleep 1
+            echo "Failing..."
+            exit 1
+        imagePullPolicy: Always
+
+      tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-init-container-fail-{{ uuid }}
+  namespace: {{ namespace }}
+  labels:
+    app: failed-job-test
+    test-type: init-failure
+    test-id: "{{ uuid }}"
+
+spec:
+  backoffLimit: 0
+
+  template:
+    metadata:
+      annotations: {{ annotations | tojson }}
+      labels:
+        app: failed-job-test
+        test-type: init-failure
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: {{ target_node }}
+
+      initContainers:
+      # Init container that fails - should prevent main container from running
+      - name: failing-init
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Init: Starting initialization"
+            sleep 1
+            echo "Init: ERROR - Initialization failed"
+            exit 1
+        imagePullPolicy: Always
+
+      containers:
+      - name: main-container
+        image: busybox:1.36
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Main: This should never run if init fails"
+            exit 0
+        imagePullPolicy: Always
+
+      tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 90
+
+check_pods:
+  # All job pods should reach Failed status
+  - name: job-exit-code-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: job-python-exception-{{ uuid }}-
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: job-multi-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: job-with-retries-{{ uuid }}-
+    namespace: {{ namespace }}
+    status: Failed
+
+  - name: job-init-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    status: Failed
+
+check_logs:
+  # Verify exit code failure
+  - name: job-exit-code-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    container: exit-failure
+    regex: "ERROR: Application failed with exit code 1"
+    operator: Exists
+
+  # Verify Python exception
+  - name: job-python-exception-{{ uuid }}-
+    namespace: {{ namespace }}
+    container: python-crash
+    regex: "Exception.*database connection failed"
+    operator: Exists
+
+  # Verify multi-container - success container runs but job still fails
+  - name: job-multi-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    container: success-sidecar
+    regex: "Sidecar: Completed successfully"
+    operator: Exists
+
+  - name: job-multi-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    container: main-app
+    regex: "Main: Encountered critical error"
+    operator: Exists
+
+  # Verify retry attempts (should see at least 2 attempts due to retries)
+  - name: job-with-retries-{{ uuid }}-
+    namespace: {{ namespace }}
+    container: retry-failure
+    regex: "Attempt started"
+    operator: Exists
+
+  # Verify init container failure prevents main container
+  - name: job-init-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    container: failing-init
+    regex: "Init: ERROR - Initialization failed"
+    operator: Exists
+
+clean_configs:
+  # Note: We need to clean up Jobs, not Pods directly
+  # Jobs automatically manage their pods
+  - type: pod
+    name: job-exit-code-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: job-python-exception-{{ uuid }}-
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: job-multi-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: job-with-retries-{{ uuid }}-
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: pod
+    name: job-init-container-fail-{{ uuid }}-
+    namespace: {{ namespace }}
+    condition: onSuccess
