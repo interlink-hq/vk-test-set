@@ -1,27 +1,21 @@
-target_nodes: 
-  - vk-hub-test-agent-1
-  - kueue-node
+target_nodes:
+  - virtual-kubelet
 
 required_namespaces:
   - default
   - kube-system
-  - interlink4
-  - interlink-v
-  - interlink-k
+  - interlink
 
-timeout_multiplier: 1
-
+timeout_multiplier: 10. 
 values:
-  namespace: interlink4
+  namespace: interlink
 
-  annotations: 
-    slurm-job.knoc.io/flags: "--job-name=test-pod-cfg -t 2800  --ntasks=8 --nodes=1 --mem-per-cpu=2000"
+  annotations:
+    slurm-job.vk.io/flags: "--job-name=test-pod-cfg -t 2800"
+    slurm-job.vk.io/image-root: "docker://" 
 
   tolerations:
     - key: virtual-node.interlink/no-schedule
-      operator: Exists
-      effect: NoSchedule
-    - key: accelerator
       operator: Exists
       effect: NoSchedule
 
