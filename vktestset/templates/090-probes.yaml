@@ -90,7 +90,7 @@ spec:
             httpd.serve_forever()
         EOF
 
-        python3 /tmp/server.py
+        python3 -u /tmp/server.py
 
     ports:
     - containerPort: 8080
@@ -100,8 +100,8 @@ spec:
       httpGet:
         path: /startup
         port: 8080
-      initialDelaySeconds: 2
-      periodSeconds: 2
+      initialDelaySeconds: 5
+      periodSeconds: 10
       failureThreshold: 5
       successThreshold: 1
       timeoutSeconds: 1
@@ -110,7 +110,7 @@ spec:
       httpGet:
         path: /healthz
         port: 8080
-      initialDelaySeconds: 10
+      initialDelaySeconds: 5
       periodSeconds: 5
       failureThreshold: 3
       successThreshold: 1
