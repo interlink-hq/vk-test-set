@@ -1,0 +1,181 @@
+## Startup, Liveness, and Readiness Probes
+##
+## Tests Kubernetes probe functionality to ensure the virtual kubelet
+## properly handles health checking mechanisms.
+##
+## This test validates:
+## - Startup probes: ensure container starts successfully
+## - Liveness probes: detect and restart unhealthy containers
+## - Readiness probes: determine when container is ready to serve traffic
+##
+## The container runs a simple HTTP server that responds to probe requests.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probes-test-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: probe-test
+    image: python:3.11-alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        cat <<'EOF' > /tmp/server.py
+        import http.server
+        import socketserver
+        import os
+        import time
+        from datetime import datetime
+
+        PORT = 8080
+        startup_time = time.time()
+
+        class HealthHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                current_time = time.time()
+                elapsed = current_time - startup_time
+
+                # Startup probe: respond OK after 5 seconds
+                if self.path == '/startup':
+                    if elapsed > 5:
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'Started\n')
+                        print(f"[{datetime.now()}] Startup probe: OK (elapsed: {elapsed:.1f}s)")
+                    else:
+                        self.send_response(503)
+                        self.end_headers()
+                        self.wfile.write(b'Starting...\n')
+                        print(f"[{datetime.now()}] Startup probe: Starting (elapsed: {elapsed:.1f}s)")
+
+                # Liveness probe: always healthy in this test
+                elif self.path == '/healthz':
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'Alive\n')
+                    print(f"[{datetime.now()}] Liveness probe: OK")
+
+                # Readiness probe: ready after 8 seconds
+                elif self.path == '/ready':
+                    if elapsed > 8:
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'Ready\n')
+                        print(f"[{datetime.now()}] Readiness probe: Ready (elapsed: {elapsed:.1f}s)")
+                    else:
+                        self.send_response(503)
+                        self.end_headers()
+                        self.wfile.write(b'Not ready\n')
+                        print(f"[{datetime.now()}] Readiness probe: Not ready (elapsed: {elapsed:.1f}s)")
+
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                pass  # Suppress default logging
+
+        print(f"[{datetime.now()}] Starting HTTP server on port {PORT}")
+        print(f"[{datetime.now()}] Endpoints: /startup, /healthz, /ready")
+
+        with socketserver.TCPServer(("", PORT), HealthHandler) as httpd:
+            httpd.serve_forever()
+        EOF
+
+        python3 -u /tmp/server.py
+
+    ports:
+    - containerPort: 8080
+      protocol: TCP
+
+    startupProbe:
+      httpGet:
+        path: /startup
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 5
+      successThreshold: 1
+      timeoutSeconds: 1
+
+    livenessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 3
+      successThreshold: 1
+      timeoutSeconds: 1
+
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 8080
+      initialDelaySeconds: 3
+      periodSeconds: 3
+      failureThreshold: 3
+      successThreshold: 1
+      timeoutSeconds: 1
+
+    resources:
+      limits:
+        memory: 128Mi
+        cpu: 200m
+      requests:
+        memory: 64Mi
+        cpu: 100m
+
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 40
+
+check_pods:
+  - name: probes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Running
+
+check_logs:
+  - name: probes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: probe-test
+    regex: 'Starting HTTP server on port 8080'
+    operator: Exists
+
+  - name: probes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: probe-test
+    regex: 'Startup probe: OK'
+    operator: Exists
+
+  - name: probes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: probe-test
+    regex: 'Liveness probe: OK'
+    operator: Exists
+
+  - name: probes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: probe-test
+    regex: 'Readiness probe: Ready'
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: probes-test-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always

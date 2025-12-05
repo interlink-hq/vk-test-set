@@ -1,0 +1,263 @@
+## Multiple Init Containers Test
+##
+## Tests multiple init containers running in sequence.
+##
+## This validates that the virtual kubelet properly:
+##  - Executes init containers in order (sequentially)
+##  - Waits for each init container to complete before starting the next
+##  - Only starts main containers after ALL init containers succeed
+##  - Shares data between init containers via volumes
+##  - Properly reports init container status and logs
+##
+## Init container execution order:
+##  1. create-config: Creates configuration files
+##  2. validate-config: Validates the configuration
+##  3. prepare-data: Prepares data files
+##
+## Then the main container reads and validates all the prepared data.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multi-init-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    app: multi-init-test
+    test-id: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  initContainers:
+  # Init Container 1: Create configuration
+  - name: create-config
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "=== Init Container 1: Creating configuration ==="
+        echo "Creating config files..."
+
+        cat > /shared/config.txt <<EOF
+        app_name=test-application
+        version=1.0.0
+        environment=testing
+        debug=true
+        EOF
+
+        echo "timestamp=$(date +%s)" >> /shared/config.txt
+        echo "init_stage=1" >> /shared/stage.txt
+
+        echo "Config created successfully"
+        cat /shared/config.txt
+
+    volumeMounts:
+      - name: shared-data
+        mountPath: /shared
+    imagePullPolicy: Always
+
+  # Init Container 2: Validate configuration
+  - name: validate-config
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "=== Init Container 2: Validating configuration ==="
+
+        if [ ! -f /shared/config.txt ]; then
+          echo "ERROR: config.txt not found!"
+          exit 1
+        fi
+
+        echo "Checking required fields..."
+        grep -q "app_name=" /shared/config.txt || { echo "ERROR: app_name missing"; exit 1; }
+        grep -q "version=" /shared/config.txt || { echo "ERROR: version missing"; exit 1; }
+        grep -q "environment=" /shared/config.txt || { echo "ERROR: environment missing"; exit 1; }
+
+        echo "init_stage=2" >> /shared/stage.txt
+        echo "validation_passed=true" >> /shared/config.txt
+
+        echo "Configuration validated successfully"
+
+    volumeMounts:
+      - name: shared-data
+        mountPath: /shared
+    imagePullPolicy: Always
+
+  # Init Container 3: Prepare data
+  - name: prepare-data
+    image: alpine:3.19
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "=== Init Container 3: Preparing data ==="
+
+        apk add --no-cache python3 > /dev/null 2>&1
+
+        python3 <<EOF
+        import json
+
+        data = {
+            "users": ["alice", "bob", "charlie"],
+            "roles": ["admin", "user", "guest"],
+            "counts": {"total": 3, "active": 2, "inactive": 1}
+        }
+
+        with open("/shared/data.json", "w") as f:
+            json.dump(data, f, indent=2)
+
+        print("Data file created")
+        EOF
+
+        echo "init_stage=3" >> /shared/stage.txt
+        echo "INIT_COMPLETE" > /shared/init_complete.flag
+
+        echo "Data preparation completed"
+        echo "All init containers finished successfully"
+
+    volumeMounts:
+      - name: shared-data
+        mountPath: /shared
+    imagePullPolicy: Always
+
+  containers:
+  # Main container: Verify all init container work
+  - name: main-app
+    image: python:3.11-alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "=== Main Container: Verifying init container results ==="
+
+        # Check that init complete flag exists
+        if [ ! -f /shared/init_complete.flag ]; then
+          echo "ERROR: Init containers did not complete properly"
+          exit 1
+        fi
+
+        echo "✓ Init complete flag found"
+
+        # Verify stage progression
+        echo "Checking init stages..."
+        cat /shared/stage.txt
+
+        stage_count=$(grep -c "init_stage=" /shared/stage.txt)
+        if [ "$stage_count" != "3" ]; then
+          echo "ERROR: Expected 3 init stages, found $stage_count"
+          exit 1
+        fi
+
+        echo "✓ All 3 init stages completed"
+
+        # Verify config file
+        echo "Checking configuration..."
+        if grep -q "validation_passed=true" /shared/config.txt; then
+          echo "✓ Configuration validated"
+        else
+          echo "ERROR: Configuration not validated"
+          exit 1
+        fi
+
+        # Verify data file with Python
+        python3 <<EOF
+        import json
+        import sys
+
+        try:
+            with open("/shared/data.json", "r") as f:
+                data = json.load(f)
+
+            assert "users" in data, "Missing users field"
+            assert len(data["users"]) == 3, "Expected 3 users"
+            assert data["counts"]["total"] == 3, "Incorrect total count"
+
+            print("✓ Data file validated")
+            print(f"  Found {len(data['users'])} users")
+            print(f"  Found {len(data['roles'])} roles")
+
+        except Exception as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+        EOF
+
+        echo ""
+        echo "=== Multi-init container test completed successfully ==="
+        echo "MULTI_INIT_TEST_PASSED"
+
+    volumeMounts:
+      - name: shared-data
+        mountPath: /shared
+    imagePullPolicy: Always
+
+  volumes:
+    - name: shared-data
+      emptyDir:
+        sizeLimit: 100Mi
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 60
+
+check_pods:
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Succeeded
+
+check_logs:
+  # Verify init container 1
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: create-config
+    regex: "Config created successfully"
+    operator: Exists
+
+  # Verify init container 2
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: validate-config
+    regex: "Configuration validated successfully"
+    operator: Exists
+
+  # Verify init container 3
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: prepare-data
+    regex: "All init containers finished successfully"
+    operator: Exists
+
+  # Verify main container
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: main-app
+    regex: "✓ All 3 init stages completed"
+    operator: Exists
+
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: main-app
+    regex: "✓ Configuration validated"
+    operator: Exists
+
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: main-app
+    regex: "✓ Data file validated"
+    operator: Exists
+
+  - name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: main-app
+    regex: "MULTI_INIT_TEST_PASSED"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: multi-init-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
