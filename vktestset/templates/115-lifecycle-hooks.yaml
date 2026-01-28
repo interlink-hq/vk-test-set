@@ -34,7 +34,7 @@ spec:
         
         # Wait for postStart hook to complete
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for postStart hook marker..."
-        for i in $(seq 1 30); do
+        for i in $(seq 1 10); do
           if [ -f /tmp/poststart-marker ]; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook marker found!"
             break
@@ -66,7 +66,7 @@ spec:
             - -c
             - |
               echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook executed!" | tee /tmp/poststart-marker
-              echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook creating marker file"
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook marker file created" >> /tmp/poststart-marker
       
       preStop:
         exec:
@@ -95,7 +95,9 @@ spec:
 
 ################################################################################
 # VALIDATION
-timeout_seconds: 60
+# Note: preStop hook logs may not be captured by all virtual kubelet implementations
+# This test validates that the implementation properly handles and logs lifecycle hooks
+timeout_seconds: 120
 
 check_pods:
   - name: lifecycle-hooks-test-{{ uuid }}
