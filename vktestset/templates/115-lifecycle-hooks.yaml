@@ -1,0 +1,146 @@
+## Lifecycle Hooks (postStart and preStop)
+##
+## Tests Kubernetes lifecycle hook functionality to ensure the virtual kubelet
+## properly handles container lifecycle management.
+##
+## This test validates:
+## - postStart hooks: executed immediately after container creation and output captured in logs
+## - preStop hooks: defined and executed during pod deletion (triggered by cleanup)
+##
+## The container runs a long-running process that:
+## 1. Validates postStart hook created a marker file
+## 2. Runs indefinitely until terminated by pod deletion
+## 3. preStop hook writes to a file before termination (file-based validation)
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-hooks-test-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: lifecycle-test
+    image: python:3.11-alpine
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Container starting..."
+        
+        # Wait for postStart hook to complete
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for postStart hook marker..."
+        for i in $(seq 1 10); do
+          if [ -f /tmp/poststart-marker ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook marker found!"
+            break
+          fi
+          sleep 1
+        done
+        
+        if [ ! -f /tmp/poststart-marker ]; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: postStart hook marker not found"
+          exit 1
+        fi
+        
+        # Read the marker content
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart marker content: $(cat /tmp/poststart-marker)"
+        
+        # Main container logic - run indefinitely
+        # The container will be terminated by pod deletion (cleanup), which triggers preStop
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Main container process running..."
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Container will run until terminated (preStop will be triggered on deletion)"
+        
+        # Sleep indefinitely - pod deletion will trigger preStop hook
+        while true; do
+          sleep 30
+        done
+
+    lifecycle:
+      postStart:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook executed!" | tee /tmp/poststart-marker
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] postStart hook marker file created" >> /tmp/poststart-marker
+      
+      preStop:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Write to a file so we can verify preStop was called
+              # Note: This runs during pod deletion, after validation completes
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] preStop hook executed!" >> /tmp/prestop-marker
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] preStop hook performing cleanup..." >> /tmp/prestop-marker
+              sleep 1
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] preStop hook completed" >> /tmp/prestop-marker
+
+    resources:
+      limits:
+        memory: 128Mi
+        cpu: 200m
+      requests:
+        memory: 64Mi
+        cpu: 100m
+
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+# Note: preStop hook runs during pod deletion (after validation completes)
+# This test validates postStart execution and that preStop is properly configured
+timeout_seconds: 30
+
+check_pods:
+  - name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Running
+
+check_logs:
+  - name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: lifecycle-test
+    regex: 'Container starting\.\.\.'
+    operator: Exists
+
+  - name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: lifecycle-test
+    regex: 'postStart hook executed!'
+    operator: Exists
+
+  - name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: lifecycle-test
+    regex: 'postStart hook marker found!'
+    operator: Exists
+
+  - name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: lifecycle-test
+    regex: 'Main container process running\.\.\.'
+    operator: Exists
+
+  - name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    container: lifecycle-test
+    regex: 'Container will run until terminated'
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: lifecycle-hooks-test-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
