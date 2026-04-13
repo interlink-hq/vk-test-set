@@ -5,19 +5,33 @@ on:
   pull_request: {}
 
 jobs:
-  test:
+  e2e:
     name: e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable unprivileged user namespaces (required by Apptainer)
+        run: sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+      - name: Setup e2e environment
+        run: bash scripts/k3s-test-setup.sh
+
+      - name: Run e2e tests
+        run: bash scripts/k3s-test-run.sh
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          submodules: recursive
-      - name: E2E Test
-        uses: dagger/dagger-for-github@v7
-        with:
-          workdir: ci
-          verb: call
-          args: -s --name e2e new-interlink test stdout
-          cloud-token: ${{ secrets.DAGGER_CLOUD_TOKEN }}
-          version: "0.19.2"
+          name: e2e-test-logs
+          path: /tmp/interlink-test-*
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Cleanup
+        if: always()
+        run: bash scripts/k3s-test-cleanup.sh
