@@ -15,7 +15,7 @@ echo "Project root: ${PROJECT_ROOT}"
 # Image refs (override via env vars)
 INTERLINK_VERSION="${INTERLINK_VERSION:-0.6.0}"
 INTERLINK_IMAGE="${INTERLINK_IMAGE:-ghcr.io/interlink-hq/interlink/interlink:${INTERLINK_VERSION}}"
-PLUGIN_IMAGE="${PLUGIN_IMAGE:-ghcr.io/interlink-hq/interlink-sidecar-slurm/interlink-sidecar-slurm:0.5.0}"
+PLUGIN_IMAGE="${PLUGIN_IMAGE:-ghcr.io/interlink-hq/interlink-sidecar-slurm/interlink-sidecar-slurm:0.6.2-pre2}"
 VK_IMAGE="${VK_IMAGE:-ghcr.io/interlink-hq/interlink/virtual-kubelet-inttw:${INTERLINK_VERSION}}"
 
 # Create or reuse test directory
