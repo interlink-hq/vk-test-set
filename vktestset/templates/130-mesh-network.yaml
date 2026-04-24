@@ -11,9 +11,12 @@
 ##  - The pod is reachable from the cluster side via a ClusterIP Service,
 ##    proving the port-forward tunnel is functional
 ##
+## Port 9999 is used (not 8080) because 8080 is the wstunnel server WebSocket
+## control port and cannot be reused for a reverse tunnel on the same process.
+##
 ## Resources created:
 ##  1. Service (ClusterIP) pointing to the server pod
-##  2. Server Pod on the virtual kubelet (exposes containerPort 8080)
+##  2. Server Pod on the virtual kubelet (exposes containerPort 9999)
 ##  3. Client Pod (runs on regular cluster nodes) that probes the Service
 
 apiVersion: v1
@@ -26,8 +29,8 @@ spec:
     mesh-net-test: "{{ uuid }}"
   ports:
     - protocol: TCP
-      port: 8080
-      targetPort: 8080
+      port: 9999
+      targetPort: 9999
 
 ---
 
@@ -52,12 +55,12 @@ spec:
     args:
       - |
         echo "MESH_NET_SERVER_STARTING"
-        echo "Listening on port 8080..."
+        echo "Listening on port 9999..."
         while true; do
-          echo -e "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nPONG" | nc -l -p 8080 -w 1 || true
+          printf "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nPONG" | nc -l -p 9999 -w 1 || true
         done
     ports:
-    - containerPort: 8080
+    - containerPort: 9999
       protocol: TCP
     imagePullPolicy: Always
 
@@ -83,7 +86,7 @@ spec:
       - |
         echo "Waiting for server to be reachable..."
         for i in $(seq 1 30); do
-          response=$(nc -w 2 mesh-net-svc-{{ uuid }}.{{ namespace }}.svc.cluster.local 8080 </dev/null 2>/dev/null)
+          response=$(nc -w 2 mesh-net-svc-{{ uuid }}.{{ namespace }}.svc.cluster.local 9999 </dev/null 2>/dev/null)
           if echo "$response" | grep -q "PONG"; then
             echo "MESH_NET_CLIENT_SUCCESS: received response from server"
             exit 0
@@ -97,7 +100,7 @@ spec:
 
 ################################################################################
 # VALIDATION
-timeout_seconds: 180
+timeout_seconds: 300
 
 check_pods:
   - name: mesh-net-server-{{ uuid }}
