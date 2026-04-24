@@ -1,0 +1,138 @@
+## Mesh Network (wstunnel port-forward) Test
+##
+## Tests that the virtual kubelet correctly sets up the wstunnel port-forward
+## networking for a pod that exposes a containerPort.
+##
+## A pod with declared containerPorts triggers the wstunnel client annotation
+## path in the virtual kubelet (interlink.eu/wstunnel-client-commands).
+## This validates that:
+##  - The pod runs successfully when wstunnel networking is active
+##  - The HTTP server binds to the declared containerPort
+##  - The pod is reachable from the cluster side via a ClusterIP Service,
+##    proving the port-forward tunnel is functional
+##
+## Resources created:
+##  1. Service (ClusterIP) pointing to the server pod
+##  2. Server Pod on the virtual kubelet (exposes containerPort 8080)
+##  3. Client Job (runs on regular cluster nodes) that probes the Service
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh-net-svc-{{ uuid }}
+  namespace: {{ namespace }}
+spec:
+  selector:
+    mesh-net-test: "{{ uuid }}"
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mesh-net-server-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+  labels:
+    mesh-net-test: "{{ uuid }}"
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+  - name: http-server
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "MESH_NET_SERVER_STARTING"
+        echo "Listening on port 8080..."
+        while true; do
+          echo -e "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nPONG" | nc -l -p 8080 -w 1 || true
+        done
+    ports:
+    - containerPort: 8080
+      protocol: TCP
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mesh-net-client-{{ uuid }}
+  namespace: {{ namespace }}
+
+spec:
+  restartPolicy: Never
+
+  containers:
+  - name: http-client
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Waiting for server to be reachable..."
+        for i in $(seq 1 30); do
+          response=$(nc -w 2 mesh-net-svc-{{ uuid }}.{{ namespace }}.svc.cluster.local 8080 </dev/null 2>&1)
+          if echo "$response" | grep -q "PONG"; then
+            echo "MESH_NET_CLIENT_SUCCESS: received response from server"
+            exit 0
+          fi
+          echo "Attempt $i: not yet reachable, retrying..."
+          sleep 5
+        done
+        echo "MESH_NET_CLIENT_TIMEOUT: server not reachable after 30 attempts"
+        exit 1
+    imagePullPolicy: Always
+
+################################################################################
+# VALIDATION
+timeout_seconds: 180
+
+check_pods:
+  - name: mesh-net-server-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Running
+
+  - name: mesh-net-client-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Succeeded
+
+check_logs:
+  - name: mesh-net-server-{{ uuid }}
+    namespace: {{ namespace }}
+    container: http-server
+    regex: "MESH_NET_SERVER_STARTING"
+    operator: Exists
+
+  - name: mesh-net-client-{{ uuid }}
+    namespace: {{ namespace }}
+    container: http-client
+    regex: "MESH_NET_CLIENT_SUCCESS"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: mesh-net-server-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
+
+  - type: service
+    name: mesh-net-svc-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
+
+  - type: pod
+    name: mesh-net-client-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
