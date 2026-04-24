@@ -14,7 +14,7 @@
 ## Resources created:
 ##  1. Service (ClusterIP) pointing to the server pod
 ##  2. Server Pod on the virtual kubelet (exposes containerPort 8080)
-##  3. Client Job (runs on regular cluster nodes) that probes the Service
+##  3. Client Pod (runs on regular cluster nodes) that probes the Service
 
 apiVersion: v1
 kind: Service
@@ -83,7 +83,7 @@ spec:
       - |
         echo "Waiting for server to be reachable..."
         for i in $(seq 1 30); do
-          response=$(nc -w 2 mesh-net-svc-{{ uuid }}.{{ namespace }}.svc.cluster.local 8080 </dev/null 2>&1)
+          response=$(nc -w 2 mesh-net-svc-{{ uuid }}.{{ namespace }}.svc.cluster.local 8080 </dev/null 2>/dev/null)
           if echo "$response" | grep -q "PONG"; then
             echo "MESH_NET_CLIENT_SUCCESS: received response from server"
             exit 0
