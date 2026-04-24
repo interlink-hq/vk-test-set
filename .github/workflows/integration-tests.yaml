@@ -1,8 +1,16 @@
 name: mesh-network-integration-tests
 
 on:
-  push: {}
-  pull_request: {}
+  push:
+    paths:
+      - 'vktestset/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'vktestset/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
 
 jobs:
   mesh-e2e:

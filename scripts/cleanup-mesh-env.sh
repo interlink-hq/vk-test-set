@@ -29,9 +29,11 @@ fi
 # Save Docker logs before stopping containers
 if [[ -f "${STATE_FILE}" ]]; then
   TEST_DIR=$(cat "${STATE_FILE}")
-  echo "Saving container logs..."
-  docker logs interlink-api    > "${TEST_DIR}/interlink-api.log"    2>&1 || true
-  docker logs interlink-plugin > "${TEST_DIR}/interlink-plugin.log" 2>&1 || true
+  if [[ -n "${TEST_DIR}" && -d "${TEST_DIR}" ]]; then
+    echo "Saving container logs..."
+    docker logs interlink-api    > "${TEST_DIR}/interlink-api.log"    2>&1 || true
+    docker logs interlink-plugin > "${TEST_DIR}/interlink-plugin.log" 2>&1 || true
+  fi
 fi
 
 # Remove Docker containers and network

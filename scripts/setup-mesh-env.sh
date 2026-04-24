@@ -223,7 +223,7 @@ echo "✓ RBAC created"
 # Create the VK kubeconfig via service-account token
 # ---------------------------------------------------------------------------
 echo "Creating VK kubeconfig..."
-VK_TOKEN=$(kubectl create token virtual-kubelet -n default --duration=24h)
+VK_TOKEN=$(kubectl create token virtual-kubelet -n default --duration=72h)
 K8S_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
 K8S_CA_DATA=$(kubectl config view --minify --raw \
   -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
