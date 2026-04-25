@@ -1,0 +1,146 @@
+## Projected Volume Newline Preservation
+##
+## Regression test for a bug where the slurm plugin stripped newlines from
+## projected volume data, causing files like kube-root-ca.crt (ca.crt) to be
+## written as a single line instead of a properly formatted multi-line PEM
+## certificate. This broke TLS certificate verification for workloads (e.g.
+## Argo Workflows) that read the mounted ca.crt to talk to the kube-apiserver.
+##
+## See: https://github.com/interlink-hq/interlink-slurm-plugin/issues/144
+##
+## This test:
+##  1. Mounts a projected ConfigMap with multi-line text and a PEM-like cert.
+##  2. Verifies that newlines are preserved in both files.
+##  3. Verifies that the auto-mounted kube-root-ca.crt (ca.crt) from the
+##     service account projected volume also preserves newlines.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: projected-config-{{ uuid }}
+  namespace: {{ namespace }}
+data:
+  multiline.txt: |
+    line one
+    line two
+    line three
+  cert-like.pem: |
+    -----BEGIN CERTIFICATE-----
+    MIICpDCCAYwCCQDU+pQ4pHgSpDANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAls
+    b2NhbGhvc3QwHhcNMjMwMTAxMDAwMDAwWhcNMjQwMTAxMDAwMDAwWjAUMRIwEAYD
+    VQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7
+    o4qne60TB3wolKBBPcYfHe7HDOFMqzNUE+pqwS5BNmflGNFQEMbmNAAk9NhbD2LC
+    F8OJvVTtFuBLhJFCBjdgveTfbMWNYOgxQtTHD8cSFDpB+ALbHVqVXqfMBRmVZLAB
+    cDefGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDef
+    GHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDefGHIJ
+    KLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDefGHIJKLMN
+    AgMBAAEwDQYJKoZIhvcNAQELBQADggEBAA==
+    -----END CERTIFICATE-----
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: projected-vol-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  containers:
+    - name: check-newlines
+      image: python:alpine
+      imagePullPolicy: Always
+      command: ["python", "-c"]
+      args:
+        - |
+          # Test 1: projected ConfigMap – plain multi-line text
+          with open("/projected/multiline.txt") as f:
+              content = f.read()
+          lines = content.splitlines()
+          assert len(lines) >= 3, f"Expected >= 3 lines, got {len(lines)}: {repr(content)}"
+          assert lines[0] == "line one",   f"Line 0 mismatch: {repr(lines[0])}"
+          assert lines[1] == "line two",   f"Line 1 mismatch: {repr(lines[1])}"
+          assert lines[2] == "line three", f"Line 2 mismatch: {repr(lines[2])}"
+          print("projected ConfigMap multiline.txt: newlines preserved correctly")
+
+          # Test 2: projected ConfigMap – PEM-like certificate
+          with open("/projected/cert-like.pem") as f:
+              pem = f.read()
+          pem_lines = pem.splitlines()
+          assert pem_lines[0]  == "-----BEGIN CERTIFICATE-----", \
+              f"PEM header mismatch: {repr(pem_lines[0])}"
+          assert pem_lines[-1] == "-----END CERTIFICATE-----", \
+              f"PEM footer mismatch: {repr(pem_lines[-1])}"
+          assert len(pem_lines) > 2, \
+              f"PEM body missing – only {len(pem_lines)} line(s)"
+          print("projected ConfigMap cert-like.pem: PEM format preserved correctly")
+
+          # Test 3: auto-mounted kube-root-ca.crt (service account projected volume)
+          with open("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt") as f:
+              ca = f.read()
+          assert "\n" in ca, \
+              f"ca.crt contains no newlines: {repr(ca[:200])}"
+          assert "-----BEGIN CERTIFICATE-----\n" in ca, \
+              f"ca.crt missing PEM header followed by newline: {repr(ca[:200])}"
+          print(f"service account ca.crt: newlines preserved ({len(ca.splitlines())} lines)")
+
+          print("All projected volume newline tests passed")
+
+      volumeMounts:
+        - name: projected-config
+          mountPath: /projected
+
+  volumes:
+    - name: projected-config
+      projected:
+        sources:
+          - configMap:
+              name: projected-config-{{ uuid }}
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 30
+
+check_pods:
+  - name: projected-vol-{{ uuid }}
+    namespace: {{ namespace }}
+
+check_logs:
+  - name: projected-vol-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "projected ConfigMap multiline\\.txt: newlines preserved correctly"
+    operator: Exists
+
+  - name: projected-vol-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "projected ConfigMap cert-like\\.pem: PEM format preserved correctly"
+    operator: Exists
+
+  - name: projected-vol-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "service account ca\\.crt: newlines preserved"
+    operator: Exists
+
+  - name: projected-vol-{{ uuid }}
+    namespace: {{ namespace }}
+    regex: "All projected volume newline tests passed"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: projected-vol-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: onSuccess
+
+  - type: config_map
+    name: projected-config-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
