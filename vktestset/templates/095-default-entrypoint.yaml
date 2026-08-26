@@ -30,7 +30,7 @@ spec:
   containers:
   # Container 1: No command, no args - uses image defaults
   - name: busybox-default
-    image: busybox:1.36
+    image: alpine:3.19
     # No command or args specified - should run default CMD
     # busybox default CMD is "sh" which will exit immediately
     imagePullPolicy: Always
