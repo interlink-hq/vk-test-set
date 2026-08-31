@@ -1,0 +1,46 @@
+name: mesh-network-integration-tests
+
+on:
+  push:
+    paths:
+      - 'vktestset/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'vktestset/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+jobs:
+  mesh-e2e:
+    name: mesh-network-e2e
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable unprivileged user namespaces (required by Apptainer/Singularity)
+        run: sudo sysctl -w kernel.unprivileged_userns_clone=1
+
+      - name: Set up mesh-network environment
+        run: bash scripts/setup-mesh-env.sh
+
+      - name: Run mesh-network integration tests
+        run: bash scripts/run-mesh-tests.sh
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesh-e2e-test-logs
+          path: /tmp/interlink-mesh-*
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Cleanup
+        if: always()
+        run: bash scripts/cleanup-mesh-env.sh

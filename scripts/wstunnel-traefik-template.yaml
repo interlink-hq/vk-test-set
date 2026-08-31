@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  namespace: {{.Namespace}}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{.Name}}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: {{.Name}}
+      annotations:
+        interlink.eu/wstunnel-path-prefix: {{.RandomPassword}}
+    spec:
+      containers:
+      - args:
+        - ./wstunnel server --log-lvl DEBUG --dns-resolver-prefer-ipv4 --restrict-http-upgrade-path-prefix {{.RandomPassword}} ws://0.0.0.0:8080
+        command:
+        - bash
+        - -c
+        image: ghcr.io/dciangot/dciangot/wg:v0.2
+        imagePullPolicy: IfNotPresent
+        name: wireguard
+        ports:
+        - containerPort: 8080
+          name: webhook
+          protocol: TCP
+        - containerPort: 51820
+          name: vpn
+          protocol: UDP
+        {{- range .ExposedPorts}}
+        - containerPort: {{.Port}}
+          name: port-{{.Port}}
+          protocol: {{.Protocol}}
+        {{- end}}
+        resources:
+          requests:
+            cpu: 100m
+            memory: 90Mi
+      nodeSelector:
+        kubernetes.io/os: linux
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{.Name}}
+  namespace: {{.Namespace}}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: {{.Name}}
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: ws
+    {{- range .ExposedPorts}}
+    {{- if ne .Port 8080}}
+    - port: {{.Port}}
+      targetPort: {{.Port}}
+      name: port-{{.Port}}
+      {{- if .Protocol}}
+      protocol: {{.Protocol}}
+      {{- end}}
+    {{- end}}
+    {{- end}}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{.Name}}
+  namespace: {{.Namespace}}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`{{.Name}}-{{.Namespace}}.{{.WildcardDNS}}`)
+      kind: Rule
+      services:
+        - name: {{.Name}}
+          port: 8080

@@ -1,0 +1,67 @@
+## Failing Init Container Test
+##
+## Tests that the virtual kubelet correctly handles a pod where an init
+## container fails, preventing the main container from starting.
+##
+## This validates that:
+##  - Pod reaches Failed status when init container exits non-zero
+##  - Init container logs are accessible after failure
+##  - The main container does NOT start when the init container fails
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: failing-init-{{ uuid }}
+  namespace: {{ namespace }}
+  annotations: {{ annotations | tojson }}
+
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: {{ target_node }}
+
+  initContainers:
+  - name: failing-init
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "Init container starting"
+        echo "Init container will fail now"
+        exit 1
+    imagePullPolicy: Always
+
+  containers:
+  - name: main
+    image: busybox:1.36
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        echo "MAIN_CONTAINER_EXECUTED"
+        exit 0
+    imagePullPolicy: Always
+
+  dnsPolicy: ClusterFirst
+  tolerations: {{ tolerations | tojson }}
+
+################################################################################
+# VALIDATION
+timeout_seconds: 60
+
+check_pods:
+  - name: failing-init-{{ uuid }}
+    namespace: {{ namespace }}
+    status: Failed
+
+check_logs:
+  - name: failing-init-{{ uuid }}
+    namespace: {{ namespace }}
+    container: failing-init
+    regex: "Init container will fail now"
+    operator: Exists
+
+clean_configs:
+  - type: pod
+    name: failing-init-{{ uuid }}
+    namespace: {{ namespace }}
+    condition: always
